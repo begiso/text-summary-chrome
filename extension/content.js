@@ -166,8 +166,56 @@
         font-size: 14px;
         line-height: 1.7;
         color: #333;
-        white-space: pre-wrap;
         word-break: break-word;
+      }
+
+      .summary-text p {
+        margin: 0 0 10px 0;
+      }
+
+      .summary-text p:last-child {
+        margin-bottom: 0;
+      }
+
+      .summary-text strong {
+        font-weight: 600;
+        color: #1a1a2e;
+      }
+
+      .summary-text em {
+        font-style: italic;
+      }
+
+      .summary-text ul, .summary-text ol {
+        margin: 6px 0 10px 20px;
+        padding: 0;
+      }
+
+      .summary-text li {
+        margin-bottom: 4px;
+      }
+
+      .summary-text code {
+        background: #f5f5f5;
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-size: 13px;
+        font-family: monospace;
+      }
+
+      .stream-cursor {
+        display: inline-block;
+        width: 2px;
+        height: 14px;
+        background: #6366f1;
+        margin-left: 2px;
+        vertical-align: text-bottom;
+        animation: blink 0.6s infinite;
+      }
+
+      @keyframes blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0; }
       }
 
       .loading-container {
@@ -408,52 +456,124 @@
     return { modal: panel, body };
   }
 
-  function showLoading() {
-    const container = document.createElement('div');
-    container.className = 'loading-container';
+  let streamBuffer = '';
+  let streamContainer = null;
+  let streamPanel = null;
 
-    const spinner = document.createElement('div');
-    spinner.className = 'spinner';
+  function renderMarkdown(text) {
+    const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-    const text = document.createElement('div');
-    text.className = 'loading-text';
-    text.textContent = 'Generating summary...';
+    const lines = text.split('\n');
+    const htmlParts = [];
+    let inList = false;
+    let listType = '';
 
-    container.appendChild(spinner);
-    container.appendChild(text);
+    for (let i = 0; i < lines.length; i++) {
+      let line = lines[i].trim();
 
-    renderPanel(container);
+      if (!line) {
+        if (inList) { htmlParts.push(`</${listType}>`); inList = false; }
+        continue;
+      }
+
+      const ulMatch = line.match(/^[\*\-]\s+(.*)/);
+      const olMatch = line.match(/^\d+[\.\)]\s+(.*)/);
+
+      if (ulMatch) {
+        if (!inList || listType !== 'ul') {
+          if (inList) htmlParts.push(`</${listType}>`);
+          htmlParts.push('<ul>'); inList = true; listType = 'ul';
+        }
+        htmlParts.push(`<li>${inlineFormat(escapeHtml(ulMatch[1]))}</li>`);
+        continue;
+      }
+
+      if (olMatch) {
+        if (!inList || listType !== 'ol') {
+          if (inList) htmlParts.push(`</${listType}>`);
+          htmlParts.push('<ol>'); inList = true; listType = 'ol';
+        }
+        htmlParts.push(`<li>${inlineFormat(escapeHtml(olMatch[1]))}</li>`);
+        continue;
+      }
+
+      if (inList) { htmlParts.push(`</${listType}>`); inList = false; }
+      htmlParts.push(`<p>${inlineFormat(escapeHtml(line))}</p>`);
+    }
+
+    if (inList) htmlParts.push(`</${listType}>`);
+    return htmlParts.join('');
   }
 
-  function showSummary(summaryText) {
+  function inlineFormat(text) {
+    return text
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/`(.+?)`/g, '<code>$1</code>');
+  }
+
+  function streamStart() {
+    streamBuffer = '';
     const container = document.createElement('div');
     container.className = 'summary-text';
-    container.textContent = summaryText;
 
+    const cursor = document.createElement('span');
+    cursor.className = 'stream-cursor';
+    container.appendChild(cursor);
+
+    streamContainer = container;
     const { modal } = renderPanel(container);
+    streamPanel = modal;
+  }
 
-    const footer = document.createElement('div');
-    footer.className = 'modal-footer';
+  function streamChunk(text) {
+    if (!streamContainer) return;
+    streamBuffer += text;
+    streamContainer.innerHTML = renderMarkdown(streamBuffer);
 
-    const copyBtn = document.createElement('button');
-    copyBtn.className = 'copy-btn';
-    copyBtn.textContent = 'Copy';
-    copyBtn.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(summaryText);
-        copyBtn.textContent = 'Copied!';
-        copyBtn.classList.add('copied');
-        setTimeout(() => {
-          copyBtn.textContent = 'Copy';
-          copyBtn.classList.remove('copied');
-        }, 2000);
-      } catch {
-        copyBtn.textContent = 'Error';
-      }
-    });
+    const cursor = document.createElement('span');
+    cursor.className = 'stream-cursor';
+    streamContainer.appendChild(cursor);
 
-    footer.appendChild(copyBtn);
-    modal.appendChild(footer);
+    const body = streamContainer.parentElement;
+    if (body) body.scrollTop = body.scrollHeight;
+  }
+
+  function streamEnd() {
+    if (!streamContainer) return;
+    streamContainer.innerHTML = renderMarkdown(streamBuffer);
+
+    const cursorEl = streamContainer.querySelector('.stream-cursor');
+    if (cursorEl) cursorEl.remove();
+
+    if (streamPanel) {
+      const footer = document.createElement('div');
+      footer.className = 'modal-footer';
+
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'copy-btn';
+      copyBtn.textContent = 'Copy';
+      const fullText = streamBuffer;
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(fullText);
+          copyBtn.textContent = 'Copied!';
+          copyBtn.classList.add('copied');
+          setTimeout(() => {
+            copyBtn.textContent = 'Copy';
+            copyBtn.classList.remove('copied');
+          }, 2000);
+        } catch {
+          copyBtn.textContent = 'Error';
+        }
+      });
+
+      footer.appendChild(copyBtn);
+      streamPanel.appendChild(footer);
+    }
+
+    streamContainer = null;
+    streamPanel = null;
   }
 
   function showError(errorMsg) {
@@ -478,6 +598,9 @@
     if (!shadowRoot) return;
     const panel = shadowRoot.querySelector('.panel');
     if (panel) panel.remove();
+    streamContainer = null;
+    streamPanel = null;
+    streamBuffer = '';
     document.removeEventListener('keydown', onEscape);
   }
 
@@ -487,11 +610,16 @@
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     switch (message.type) {
-      case 'SHOW_LOADING':
-        showLoading();
+      case 'PING':
         break;
-      case 'SHOW_SUMMARY':
-        showSummary(message.data);
+      case 'STREAM_START':
+        streamStart();
+        break;
+      case 'STREAM_CHUNK':
+        streamChunk(message.data);
+        break;
+      case 'STREAM_END':
+        streamEnd();
         break;
       case 'SHOW_ERROR':
         showError(message.data);

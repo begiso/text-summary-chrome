@@ -1,13 +1,9 @@
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 const MODELS = [
-  'gemini-2.5-flash-lite',
-  'gemini-2.5-flash',
   'gemini-2.0-flash-lite',
+  'gemini-2.5-flash-lite',
   'gemini-2.0-flash',
-  'gemini-3.1-flash-lite-preview',
 ];
-const MAX_RETRIES = 2;
-const RETRY_DELAY_MS = 5000;
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
@@ -35,32 +31,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+async function ensureContentScript(tabId) {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+  } catch {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+    await chrome.scripting.insertCSS({ target: { tabId }, files: ['content.css'] });
+  }
+}
+
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== 'summarize-selection' || !info.selectionText) return;
 
   const apiKey = await getApiKey();
+
+  await ensureContentScript(tab.id);
+
   if (!apiKey) {
-    try {
-      await chrome.tabs.sendMessage(tab.id, { type: 'SHOW_ERROR', data: 'API key not set. Click the extension icon and enter your Gemini API key.' });
-    } catch {
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
-      await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['content.css'] });
-      await chrome.tabs.sendMessage(tab.id, { type: 'SHOW_ERROR', data: 'API key not set. Click the extension icon and enter your Gemini API key.' });
-    }
+    await chrome.tabs.sendMessage(tab.id, {
+      type: 'SHOW_ERROR',
+      data: 'API key not set. Click the extension icon and enter your Gemini API key.',
+    });
     return;
   }
 
-  try {
-    await chrome.tabs.sendMessage(tab.id, { type: 'SHOW_LOADING' });
-  } catch {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
-    await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['content.css'] });
-    await chrome.tabs.sendMessage(tab.id, { type: 'SHOW_LOADING' });
-  }
+  await chrome.tabs.sendMessage(tab.id, { type: 'STREAM_START' });
 
   try {
-    const summary = await fetchSummary(apiKey, info.selectionText);
-    await chrome.tabs.sendMessage(tab.id, { type: 'SHOW_SUMMARY', data: summary });
+    await streamSummary(apiKey, info.selectionText, tab.id);
+    await chrome.tabs.sendMessage(tab.id, { type: 'STREAM_END' });
   } catch (error) {
     await chrome.tabs.sendMessage(tab.id, {
       type: 'SHOW_ERROR',
@@ -69,69 +68,88 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 });
 
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+async function raceForAvailableModel(apiKey, body) {
+  const controllers = MODELS.map(() => new AbortController());
 
-async function tryAllModels(apiKey, body) {
-  const errors = [];
-
-  for (const model of MODELS) {
-    const url = `${BASE_URL}/${model}:generateContent?key=${apiKey}`;
-
+  const checks = MODELS.map(async (model, i) => {
+    const url = `${BASE_URL}/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,
+      signal: controllers[i].signal,
     });
-
-    if (response.status === 429 || response.status === 404 || response.status === 503) {
-      errors.push(`${model}: ${response.status}`);
-      continue;
-    }
 
     if (response.status === 400 || response.status === 403) {
       throw new Error('Invalid API key. Please check your key in the extension settings.');
     }
 
     if (!response.ok) {
-      errors.push(`${model}: ${response.status}`);
-      continue;
+      throw new Error(`${model}: ${response.status}`);
     }
 
-    const result = await response.json();
-    const candidate = result.candidates?.[0]?.content?.parts?.[0]?.text;
+    controllers.forEach((c, j) => { if (j !== i) c.abort(); });
+    return { model, response };
+  });
 
-    if (!candidate) {
-      errors.push(`${model}: empty response`);
-      continue;
-    }
-
-    return candidate.trim();
-  }
-
-  return { failed: true, errors };
+  return Promise.any(checks);
 }
 
-async function fetchSummary(apiKey, text) {
-  const prompt = `You are a concise summarization assistant. Provide a clear, brief summary of the following text in the same language as the text. Do not add introductions like "Here is a summary". Just output the key points.\n\nText:\n${text}`;
+async function readStream(response, tabId) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const jsonStr = line.slice(6).trim();
+      if (!jsonStr || jsonStr === '[DONE]') continue;
+
+      try {
+        const parsed = JSON.parse(jsonStr);
+        const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) {
+          await chrome.tabs.sendMessage(tabId, { type: 'STREAM_CHUNK', data: text });
+        }
+      } catch {
+        // skip malformed chunks
+      }
+    }
+  }
+}
+
+async function streamSummary(apiKey, text, tabId) {
+  const trimmed = text.length > 4000 ? text.slice(0, 4000) : text;
+  const prompt = `Summarize concisely in the same language as the text. No intro phrases.\n\n${trimmed}`;
 
   const body = JSON.stringify({
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
-      temperature: 0.3,
-      maxOutputTokens: 1024,
+      temperature: 0.2,
+      maxOutputTokens: 512,
     },
   });
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    if (attempt > 0) await delay(RETRY_DELAY_MS);
-
-    const result = await tryAllModels(apiKey, body);
-    if (typeof result === 'string') return result;
-
-    if (attempt === MAX_RETRIES) {
-      throw new Error('Rate limit exceeded. Please wait a minute and try again.');
+  let winner;
+  try {
+    winner = await raceForAvailableModel(apiKey, body);
+  } catch (err) {
+    if (err instanceof AggregateError) {
+      const invalidKey = err.errors.find((e) => e.message?.includes('Invalid API key'));
+      if (invalidKey) throw invalidKey;
     }
+    if (err.message?.includes('Invalid API key')) throw err;
+    throw new Error('Rate limit exceeded. Please wait a minute and try again.');
   }
+
+  await readStream(winner.response, tabId);
 }
