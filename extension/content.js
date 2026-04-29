@@ -417,7 +417,7 @@
 
     const text = document.createElement('div');
     text.className = 'loading-text';
-    text.textContent = 'Генерация саммари...';
+    text.textContent = 'Generating summary...';
 
     container.appendChild(spinner);
     container.appendChild(text);
@@ -437,18 +437,18 @@
 
     const copyBtn = document.createElement('button');
     copyBtn.className = 'copy-btn';
-    copyBtn.textContent = 'Копировать';
+    copyBtn.textContent = 'Copy';
     copyBtn.addEventListener('click', async () => {
       try {
         await navigator.clipboard.writeText(summaryText);
-        copyBtn.textContent = 'Скопировано!';
+        copyBtn.textContent = 'Copied!';
         copyBtn.classList.add('copied');
         setTimeout(() => {
-          copyBtn.textContent = 'Копировать';
+          copyBtn.textContent = 'Copy';
           copyBtn.classList.remove('copied');
         }, 2000);
       } catch {
-        copyBtn.textContent = 'Ошибка';
+        copyBtn.textContent = 'Error';
       }
     });
 

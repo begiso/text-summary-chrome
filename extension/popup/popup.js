@@ -9,20 +9,20 @@ chrome.runtime.sendMessage({ type: 'GET_API_KEY' }, (response) => {
   if (chrome.runtime.lastError) return;
   if (response?.key) {
     input.value = response.key;
-    setStatus('active', 'Готово к работе');
+    setStatus('active', 'Ready');
   } else {
-    setStatus('inactive', 'Введите API ключ');
+    setStatus('inactive', 'Enter API key');
   }
 });
 
 saveBtn.addEventListener('click', () => {
   const key = input.value.trim();
   if (!key) {
-    showMsg('Введите ключ', 'error');
+    showMsg('Please enter a key', 'error');
     return;
   }
   if (!key.startsWith('AIza')) {
-    showMsg('Ключ должен начинаться с AIza...', 'error');
+    showMsg('Key must start with AIza...', 'error');
     return;
   }
 
@@ -30,11 +30,11 @@ saveBtn.addEventListener('click', () => {
   chrome.runtime.sendMessage({ type: 'SAVE_API_KEY', key }, (response) => {
     saveBtn.disabled = false;
     if (chrome.runtime.lastError) {
-      showMsg('Ошибка сохранения', 'error');
+      showMsg('Failed to save', 'error');
       return;
     }
-    showMsg('Ключ сохранён!', 'success');
-    setStatus('active', 'Готово к работе');
+    showMsg('Key saved!', 'success');
+    setStatus('active', 'Ready');
   });
 });
 

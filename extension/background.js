@@ -12,7 +12,7 @@ const RETRY_DELAY_MS = 5000;
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: 'summarize-selection',
-    title: 'Сделать саммари с AI',
+    title: 'Summarize with AI',
     contexts: ['selection'],
   });
 });
@@ -41,11 +41,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const apiKey = await getApiKey();
   if (!apiKey) {
     try {
-      await chrome.tabs.sendMessage(tab.id, { type: 'SHOW_ERROR', data: 'API ключ не настроен. Нажмите на иконку расширения и введите ваш Gemini API ключ.' });
+      await chrome.tabs.sendMessage(tab.id, { type: 'SHOW_ERROR', data: 'API key not set. Click the extension icon and enter your Gemini API key.' });
     } catch {
       await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
       await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['content.css'] });
-      await chrome.tabs.sendMessage(tab.id, { type: 'SHOW_ERROR', data: 'API ключ не настроен. Нажмите на иконку расширения и введите ваш Gemini API ключ.' });
+      await chrome.tabs.sendMessage(tab.id, { type: 'SHOW_ERROR', data: 'API key not set. Click the extension icon and enter your Gemini API key.' });
     }
     return;
   }
@@ -91,7 +91,7 @@ async function tryAllModels(apiKey, body) {
     }
 
     if (response.status === 400 || response.status === 403) {
-      throw new Error('Неверный API ключ. Проверьте ключ в настройках расширения.');
+      throw new Error('Invalid API key. Please check your key in the extension settings.');
     }
 
     if (!response.ok) {
@@ -114,7 +114,7 @@ async function tryAllModels(apiKey, body) {
 }
 
 async function fetchSummary(apiKey, text) {
-  const prompt = `Ты — помощник для создания кратких саммари. Дай краткое, понятное саммари следующего текста на том же языке, на котором написан текст. Не добавляй вступлений вроде "Вот саммари". Просто выдай суть.\n\nТекст:\n${text}`;
+  const prompt = `You are a concise summarization assistant. Provide a clear, brief summary of the following text in the same language as the text. Do not add introductions like "Here is a summary". Just output the key points.\n\nText:\n${text}`;
 
   const body = JSON.stringify({
     contents: [{ parts: [{ text: prompt }] }],
@@ -131,7 +131,7 @@ async function fetchSummary(apiKey, text) {
     if (typeof result === 'string') return result;
 
     if (attempt === MAX_RETRIES) {
-      throw new Error('Лимит запросов исчерпан. Подождите минуту и попробуйте снова.');
+      throw new Error('Rate limit exceeded. Please wait a minute and try again.');
     }
   }
 }
