@@ -5,7 +5,7 @@ Chrome extension that summarizes any selected text on a webpage using Google Gem
 ## How it works
 
 1. Select any text on a webpage
-2. Right-click and choose **"Сделать саммари с AI"**
+2. Right-click and choose **"Summarize with AI"**
 3. A side panel appears with a concise summary
 
 The summary is generated in the same language as the selected text.
